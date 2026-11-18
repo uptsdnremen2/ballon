@@ -1,0 +1,984 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>BALLOON POP – Pecahkan Balon Pintar</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600;700&family=Nunito:wght@400;700;900&display=swap" rel="stylesheet">
+    
+    <!-- MediaPipe Hands CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <style>
+        * {
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        body {
+            font-family: 'Nunito', sans-serif;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: linear-gradient(to bottom, #38bdf8 0%, #7dd3fc 60%, #bae6fd 100%);
+            color: #1e293b;
+            touch-action: none;
+        }
+        .font-fredoka {
+            font-family: 'Fredoka', cursive;
+        }
+        #game-canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 10;
+        }
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 20;
+            pointer-events: none;
+        }
+        .pointer-events-auto {
+            pointer-events: auto;
+        }
+        
+        /* Glassmorphism UI */
+        .glass-card {
+            background: rgba(255, 255, 255, 0.9);
+            backdrop-filter: blur(12px);
+            border: 3px solid rgba(255, 255, 255, 0.8);
+            box-shadow: 0 10px 30px rgba(0, 100, 200, 0.15);
+        }
+        .btn-pop {
+            transition: transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.15s ease;
+        }
+        .btn-pop:hover {
+            transform: scale(1.05);
+            box-shadow: 0 10px 20px rgba(0,0,0,0.15);
+        }
+        .btn-pop:active {
+            transform: scale(0.95);
+        }
+
+        /* Hand Reticle Pointer */
+        #reticle {
+            position: absolute;
+            width: 44px;
+            height: 44px;
+            border: 4px solid #ef4444;
+            background: rgba(239, 68, 68, 0.2);
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 50;
+            pointer-events: none;
+            display: none;
+            box-shadow: 0 0 15px rgba(239, 68, 68, 0.6);
+            transition: border-color 0.1s, transform 0.1s;
+        }
+        #reticle::after {
+            content: '';
+            position: absolute;
+            top: 50%; left: 50%;
+            width: 8px; height: 8px;
+            background: #ef4444;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+        }
+        #reticle.pinching {
+            border-color: #22c55e;
+            background: rgba(34, 197, 94, 0.4);
+            transform: translate(-50%, -50%) scale(0.85);
+            box-shadow: 0 0 20px rgba(34, 197, 94, 0.8);
+        }
+        #reticle.pinching::after {
+            background: #22c55e;
+        }
+
+        #camera-feed {
+            position: absolute;
+            bottom: 16px;
+            right: 16px;
+            width: 140px;
+            height: 105px;
+            border-radius: 16px;
+            border: 3px solid #ffffff;
+            object-fit: cover;
+            transform: scaleX(-1);
+            z-index: 30;
+            display: none;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.2);
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Game World Canvas -->
+    <canvas id="game-canvas"></canvas>
+
+    <!-- Camera Feed -->
+    <video id="camera-feed" autoplay playsinline></video>
+
+    <!-- Custom Reticle -->
+    <div id="reticle"></div>
+
+    <!-- UI Overlay Layer -->
+    <div id="ui-layer" class="flex flex-col justify-between">
+        
+        <!-- HUD Navbar -->
+        <div id="navbar" class="hidden w-full flex flex-wrap justify-between items-center p-3 sm:p-4 glass-card pointer-events-auto rounded-b-3xl border-b-4 border-sky-300">
+            <!-- Player Info & Sound Toggle -->
+            <div class="flex items-center gap-3">
+                <div class="w-11 h-11 bg-amber-400 rounded-2xl flex items-center justify-center text-2xl shadow-inner border-2 border-white">
+                    🎈
+                </div>
+                <div>
+                    <div class="text-xs text-slate-500 font-bold uppercase tracking-wider">Siswa</div>
+                    <div id="nav-player-name" class="font-fredoka text-lg text-sky-900 leading-tight">Nama</div>
+                </div>
+                <button onclick="toggleAudio()" id="btn-sound" class="ml-2 p-2 bg-sky-100 hover:bg-sky-200 text-sky-700 rounded-xl font-bold text-sm transition">
+                    🔊
+                </button>
+            </div>
+            
+            <!-- Subject & Level Badge -->
+            <div class="text-center my-1 sm:my-0">
+                <div class="text-xs text-sky-700 font-bold uppercase tracking-wider">Bahasa Indonesia Kelas 3 SD</div>
+                <div class="font-fredoka text-xl text-amber-500 drop-shadow-sm">
+                    LEVEL <span id="nav-level">1</span>/5
+                </div>
+            </div>
+
+            <!-- Timer & Score -->
+            <div class="flex items-center gap-4 sm:gap-6">
+                <div class="text-center">
+                    <div class="text-xs text-slate-500 font-bold uppercase tracking-wider">Waktu</div>
+                    <div id="nav-timer" class="font-fredoka text-xl text-rose-500">30s</div>
+                </div>
+                <div class="text-right">
+                    <div class="text-xs text-slate-500 font-bold uppercase tracking-wider">Skor</div>
+                    <div id="nav-score" class="font-fredoka text-2xl text-emerald-500 drop-shadow-sm">0</div>
+                </div>
+            </div>
+
+            <!-- Level Progress Bar -->
+            <div class="w-full bg-slate-200 rounded-full h-2.5 mt-2 overflow-hidden border border-white">
+                <div id="progress-bar" class="bg-gradient-to-r from-amber-400 to-emerald-400 h-2.5 rounded-full transition-all duration-300" style="width: 0%"></div>
+            </div>
+        </div>
+
+        <!-- Question Display -->
+        <div id="question-box" class="hidden mx-auto mt-3 w-11/12 max-w-3xl glass-card rounded-3xl p-4 sm:p-5 text-center pointer-events-auto border-4 border-amber-300">
+            <div class="flex justify-between items-center mb-1">
+                <span id="question-type" class="bg-amber-100 text-amber-800 font-fredoka px-3 py-0.5 rounded-full text-xs uppercase tracking-wide border border-amber-300">
+                    LOTS
+                </span>
+                <span id="question-count" class="text-xs font-bold text-slate-500">Soal 1 dari 3</span>
+            </div>
+            <h2 id="question-text" class="font-fredoka text-lg sm:text-2xl text-slate-800 leading-snug">
+                Pertanyaan akan ditampilkan di sini...
+            </h2>
+            <p class="mt-1 text-xs text-sky-600 font-semibold italic">Arahkan tangan & cubit (pinch) atau klik balon jawaban yang benar!</p>
+        </div>
+
+        <!-- Interactive Screens Overlay -->
+        <div class="flex-grow flex items-center justify-center pointer-events-none p-4">
+            
+            <!-- Login Screen -->
+            <div id="screen-login" class="glass-card p-6 sm:p-8 rounded-3xl text-center max-w-md w-full pointer-events-auto border-4 border-sky-300 shadow-2xl">
+                <div class="inline-block p-4 bg-amber-100 rounded-full border-2 border-amber-300 mb-3 animate-bounce">
+                    <span class="text-5xl">🎈</span>
+                </div>
+                <h1 class="font-fredoka text-3xl sm:text-4xl text-sky-600 mb-1 drop-shadow">BALLOON POP</h1>
+                <p class="text-slate-600 text-sm font-bold mb-6">Pecahkan Balon Pintar - Bahasa Indonesia Kelas 3 SD</p>
+                
+                <div class="mb-6 text-left">
+                    <label class="block text-xs font-bold text-sky-800 uppercase tracking-wider mb-2">Nama Pemain</label>
+                    <input type="text" id="input-name" placeholder="Tulis namamu di sini..." class="w-full px-4 py-3 rounded-2xl bg-white border-2 border-sky-300 focus:border-amber-400 focus:ring-4 focus:ring-amber-100 outline-none text-center font-fredoka text-xl text-slate-700 transition">
+                </div>
+                
+                <button onclick="startGame()" class="btn-pop w-full bg-gradient-to-r from-emerald-400 to-teal-500 hover:from-emerald-500 hover:to-teal-600 text-white font-fredoka text-2xl py-3.5 rounded-2xl shadow-lg border-b-4 border-teal-700">
+                    MULAI BERMAIN 🚀
+                </button>
+            </div>
+
+            <!-- Setup Control Screen -->
+            <div id="screen-setup" class="hidden glass-card p-6 sm:p-8 rounded-3xl text-center max-w-lg w-full pointer-events-auto border-4 border-sky-300">
+                <h2 class="font-fredoka text-2xl sm:text-3xl text-sky-700 mb-2">Pilih Cara Bermain</h2>
+                <p class="text-slate-600 text-sm mb-6">Gunakan sensor kamera gestur tangan atau gunakan mouse/layar sentuh.</p>
+                
+                <div class="flex flex-col gap-4">
+                    <button onclick="enableCamera()" id="btn-camera" class="btn-pop bg-gradient-to-r from-sky-400 to-blue-500 text-white font-fredoka text-xl py-4 rounded-2xl shadow-md border-b-4 border-blue-700 flex items-center justify-center gap-3">
+                        <span class="text-3xl">✋</span>
+                        <div class="text-left">
+                            <div>Main dengan Kamera (Gesture)</div>
+                            <div class="text-xs font-normal text-sky-100">Gerakkan tangan & cubit telunjuk-jempol</div>
+                        </div>
+                    </button>
+                    
+                    <button onclick="startLevel()" class="btn-pop bg-slate-700 hover:bg-slate-800 text-white font-fredoka text-lg py-3.5 rounded-2xl border-b-4 border-slate-900 flex items-center justify-center gap-2">
+                        <span>🖱️</span> Gunakan Mouse / Layar Sentuh
+                    </button>
+                </div>
+                
+                <div id="camera-loading" class="hidden mt-4 text-sky-600 font-bold animate-pulse text-sm">
+                    Memuat sistem deteksi tangan... Mohon izinkan kamera...
+                </div>
+            </div>
+
+            <!-- Feedback Popup -->
+            <div id="screen-feedback" class="hidden glass-card p-6 rounded-3xl text-center max-w-md w-full pointer-events-auto border-4">
+                <div id="feedback-icon" class="text-5xl mb-2">✨</div>
+                <h2 id="feedback-title" class="font-fredoka text-3xl mb-2">Hebat!</h2>
+                <p id="feedback-desc" class="text-slate-700 text-base mb-6 leading-relaxed">Penjelasan edukatif soal.</p>
+                <button onclick="nextQuestion()" class="btn-pop bg-sky-500 hover:bg-sky-600 text-white font-fredoka text-xl py-3 px-8 rounded-2xl shadow-md border-b-4 border-sky-700 w-full">
+                    SOAL BERIKUTNYA ➔
+                </button>
+            </div>
+
+            <!-- Level End Screen -->
+            <div id="screen-level-end" class="hidden glass-card p-8 rounded-3xl text-center max-w-md w-full pointer-events-auto border-4 border-amber-300">
+                <h2 class="font-fredoka text-3xl text-amber-500 mb-2">LEVEL SELESAI!</h2>
+                <div class="text-6xl my-4 animate-bounce">⭐</div>
+                <p class="text-slate-700 text-lg mb-6">Luar biasa, <span id="level-end-name" class="font-bold text-sky-700">Siswa</span>!</p>
+                <button onclick="startLevel()" class="btn-pop bg-amber-400 hover:bg-amber-500 text-amber-950 font-fredoka text-2xl py-3 px-8 rounded-2xl shadow-md border-b-4 border-amber-600 w-full">
+                    MASUK LEVEL BERIKUTNYA 🚀
+                </button>
+            </div>
+
+            <!-- Game Complete Screen -->
+            <div id="screen-game-complete" class="hidden glass-card p-8 rounded-3xl text-center max-w-lg w-full pointer-events-auto border-4 border-emerald-400">
+                <div class="text-6xl mb-2">👑</div>
+                <h1 class="font-fredoka text-3xl sm:text-4xl text-emerald-600 mb-2">SELAMAT & SUKSES!</h1>
+                <p class="text-slate-700 text-base mb-4">
+                    Hebat sekali <span id="final-name" class="font-bold text-sky-700">Siswa</span>! Kamu adalah Juara Bahasa Indonesia!
+                </p>
+                
+                <div class="bg-amber-100 rounded-2xl p-4 my-4 border-2 border-amber-300">
+                    <div class="text-xs text-amber-800 font-bold uppercase tracking-wider">Total Skor Akhir</div>
+                    <div id="final-score" class="font-fredoka text-5xl text-amber-600 mt-1">1500</div>
+                </div>
+                
+                <button onclick="resetGame()" class="btn-pop bg-emerald-500 hover:bg-emerald-600 text-white font-fredoka text-2xl py-3.5 px-8 rounded-2xl shadow-lg border-b-4 border-emerald-700 w-full">
+                    MAIN LAGI 🔁
+                </button>
+            </div>
+
+        </div>
+    </div>
+
+    <!-- Questions Dataset -->
+    <script>
+        const gameData = [
+            {
+                level: 1,
+                title: "Gagasan Utama & Ide Pokok",
+                questions: [
+                    {
+                        type: "LOTS",
+                        text: "Gagasan utama atau ide inti dari sebuah paragraf disebut juga...",
+                        options: ["Ide Pokok", "Judul Buku", "Kalimat Penjelas", "Kata Kunci"],
+                        correct: 0,
+                        explanation: "Ide pokok adalah ide utama yang menjadi inti pembahasan dalam sebuah paragraf."
+                    },
+                    {
+                        type: "MOTS",
+                        text: "Di mana biasanya ide pokok dapat kita temukan dalam sebuah paragraf?",
+                        options: ["Di awal atau akhir paragraf", "Di luar isi paragraf", "Hanya pada judul cerita", "Di setiap kata sifat"],
+                        correct: 0,
+                        explanation: "Ide pokok biasanya terletak pada kalimat utama di awal (deduktif) atau di akhir paragraf (induktif)."
+                    },
+                    {
+                        type: "HOTS",
+                        text: "'Siti rajin menabung. Ia menyisihkan uang sakunya setiap hari.' Apakah ide pokok dari bacaan tersebut?",
+                        options: ["Siti anak yang rajin menabung", "Siti suka membeli jajan", "Uang saku Siti sangat banyak", "Siti tidak pernah jajan"],
+                        correct: 0,
+                        explanation: "Kalimat kedua menjelaskan kebiasaan Siti menabung, sehingga ide utamanya adalah 'Siti anak yang rajin menabung'."
+                    }
+                ]
+            },
+            {
+                level: 2,
+                title: "Unsur Tokoh & Watak Cerita",
+                questions: [
+                    {
+                        type: "LOTS",
+                        text: "Pelaku atau pemeran dalam sebuah cerita pendek disebut...",
+                        options: ["Tokoh", "Latar Tempat", "Amanat", "Alur"],
+                        correct: 0,
+                        explanation: "Tokoh adalah orang atau hewan yang berperan dan mengalami peristiwa dalam cerita."
+                    },
+                    {
+                        type: "MOTS",
+                        text: "Kelinci selalu membantu temannya yang kesulitan di hutan. Watak kelinci adalah...",
+                        options: ["Suka menolong", "Penyelamat hutan", "Sombong", "Penakut"],
+                        correct: 0,
+                        explanation: "Sifat atau watak kelinci adalah suka menolong karena selalu membantu teman yang kesulitan."
+                    },
+                    {
+                        type: "HOTS",
+                        text: "Mengapa penting bagi kita mengetahui watak tokoh baik dalam cerita?",
+                        options: ["Untuk meniru kebaikan tokoh tersebut", "Agar bisa menghafal nama tokoh", "Supaya cerita cepat selesai", "Untuk mengganti judul cerita"],
+                        correct: 0,
+                        explanation: "Dengan memahami watak baik tokoh, kita dapat memetik pelajaran moral (amanat) dan menirunya dalam kehidupan."
+                    }
+                ]
+            },
+            {
+                level: 3,
+                title: "Latar & Tempat Kejadian",
+                questions: [
+                    {
+                        type: "LOTS",
+                        text: "Kapan dan di mana terjadinya peristiwa dalam cerita disebut...",
+                        options: ["Latar (Setting)", "Judul", "Tema", "Tokoh Utama"],
+                        correct: 0,
+                        explanation: "Latar adalah keterangan mengenai tempat, waktu, dan suasana terjadinya peristiwa dalam cerita."
+                    },
+                    {
+                        type: "MOTS",
+                        text: "'Ombak bergulung lembut. Ditemani angin malam, para nelayan bersiap melaut.' Latar tempat bacaan ini di...",
+                        options: ["Pantai / Laut", "Taman Kota", "Pegunungan", "Sawah"],
+                        correct: 0,
+                        explanation: "Kata 'ombak' dan 'nelayan melaut' menunjukkan latar tempat berlangsung di pantai atau laut."
+                    },
+                    {
+                        type: "HOTS",
+                        text: "Jika latar suasana cerita digambarkan 'mencekam dan gelap', bagaimana perasaan tokoh di dalamnya?",
+                        options: ["Cemas atau takut", "Sangat gembira", "Merasa lapar", "Tertawa terbahak-bahak"],
+                        correct: 0,
+                        explanation: "Suasana gelap dan mencekam secara alami mempengaruhi kondisi psikologis tokoh menjadi cemas atau takut."
+                    }
+                ]
+            },
+            {
+                level: 4,
+                title: "Puisi Anak & Keindahan Kata",
+                questions: [
+                    {
+                        type: "LOTS",
+                        text: "Bait dan baris adalah susunan penulisan karya sastra jenis...",
+                        options: ["Puisi", "Pengumuman", "Dongeng", "Surat"],
+                        correct: 0,
+                        explanation: "Puisi ditulis dalam bentuk bait-bait yang terdiri dari beberapa baris kata indah."
+                    },
+                    {
+                        type: "MOTS",
+                        text: "'Kau membimbingku membaca dan menulis.' Kalimat puisi tersebut ditujukan kepada...",
+                        options: ["Guru", "Sepatu", "Awan", "Bunga"],
+                        correct: 0,
+                        explanation: "Membimbing membaca dan menulis adalah peran mulia seorang guru."
+                    },
+                    {
+                        type: "HOTS",
+                        text: "Mengapa membacakan puisi di depan kelas harus dengan intonasi dan ekspresi yang sesuai?",
+                        options: ["Agar perasaan puisi tersampaikan ke pendengar", "Agar suara menjadi paling keras", "Supaya cepat selesai membaca", "Agar dipuji memegang kertas indah"],
+                        correct: 0,
+                        explanation: "Ekspresi dan intonasi yang tepat memperkuat penjiwaan sehingga pesan dan perasaan puisi sampai ke pendengar."
+                    }
+                ]
+            },
+            {
+                level: 5,
+                title: "Amanat & Pesan Moral",
+                questions: [
+                    {
+                        type: "LOTS",
+                        text: "Pesan kebaikan yang ingin disampaikan pengarang kepada pembaca dinamakan...",
+                        options: ["Amanat", "Alur", "Judul", "Penguraian"],
+                        correct: 0,
+                        explanation: "Amanat adalah pesan moral atau nilai kebaikan yang terkandung dalam sebuah cerita."
+                    },
+                    {
+                        type: "MOTS",
+                        text: "Cerita tentang anak yang jujur selalu dipercaya teman-temannya. Amanat cerita ini adalah...",
+                        options: ["Kita harus selalu berkata jujur", "Teman harus banyak", "Menyimpan rahasia sendiri", "Jangan percaya pada siapapun"],
+                        correct: 0,
+                        explanation: "Pesan utama cerita tersebut mengajarkan pentingnya perilaku jujur agar dipercaya orang lain."
+                    },
+                    {
+                        type: "HOTS",
+                        text: "Apa akibatnya jika kita mengabaikan amanat baik dari cerita dongeng yang telah dibaca?",
+                        options: ["Dapat melakukan kesalahan yang sama seperti tokoh buruk", "Buku dongeng akan hilang", "Nilai membaca menjadi nol", "Cerita dongeng berubah sendiri"],
+                        correct: 0,
+                        explanation: "Amanat adalah tuntunan moral; jika diabaikan, kita bisa terjerumus melakukan kesalahan seperti tokoh antagonis."
+                    }
+                ]
+            }
+        ];
+    </script>
+
+    <!-- Game Core Engine -->
+    <script>
+        // Game State Variables
+        let playerName = "";
+        let currentLevel = 0;
+        let currentQIndex = 0;
+        let score = 0;
+        let timerSeconds = 30;
+        let timerInterval = null;
+        let gameState = 'login'; // login, setup, playing, feedback, level_end, game_complete
+        let audioEnabled = true;
+
+        // Interactive Canvas Objects
+        let balloons = [];
+        let particles = [];
+        let clouds = [];
+
+        // Canvas Setup
+        const canvas = document.getElementById('game-canvas');
+        const ctx = canvas.getContext('2d');
+        let width = window.innerWidth;
+        let height = window.innerHeight;
+
+        function resizeCanvas() {
+            width = window.innerWidth;
+            height = window.innerHeight;
+            canvas.width = width;
+            canvas.height = height;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        // Audio System (Synthesizer via Web Audio API)
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        let audioCtx;
+
+        function initAudio() {
+            if (!audioCtx) audioCtx = new AudioContext();
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+        }
+
+        function toggleAudio() {
+            audioEnabled = !audioEnabled;
+            document.getElementById('btn-sound').innerText = audioEnabled ? '🔊' : '🔇';
+        }
+
+        function playSound(type) {
+            if (!audioEnabled) return;
+            initAudio();
+            const now = audioCtx.currentTime;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+
+            if (type === 'pop') {
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(400, now);
+                osc.frequency.exponentialRampToValueAtTime(80, now + 0.08);
+                gain.gain.setValueAtTime(0.3, now);
+                gain.gain.linearRampToValueAtTime(0.01, now + 0.08);
+                osc.start(now);
+                osc.stop(now + 0.08);
+            } else if (type === 'correct') {
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(523.25, now); // C5
+                osc.frequency.setValueAtTime(659.25, now + 0.1); // E5
+                osc.frequency.setValueAtTime(783.99, now + 0.2); // G5
+                gain.gain.setValueAtTime(0.2, now);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+                osc.start(now);
+                osc.stop(now + 0.4);
+            } else if (type === 'wrong') {
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(200, now);
+                osc.frequency.setValueAtTime(160, now + 0.15);
+                gain.gain.setValueAtTime(0.25, now);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+                osc.start(now);
+                osc.stop(now + 0.35);
+            }
+        }
+
+        // --- Interaction Controls (Mouse, Touch, MediaPipe Gesture) ---
+        let cursorX = width / 2;
+        let cursorY = height / 2;
+        let isPinching = false;
+        let canInteract = true;
+        const reticle = document.getElementById('reticle');
+
+        // Mouse & Touch Events
+        window.addEventListener('mousemove', (e) => {
+            if (!cameraActive) {
+                cursorX = e.clientX;
+                cursorY = e.clientY;
+                updateReticlePos();
+            }
+        });
+
+        window.addEventListener('touchmove', (e) => {
+            if (!cameraActive && e.touches.length > 0) {
+                cursorX = e.touches[0].clientX;
+                cursorY = e.touches[0].clientY;
+                updateReticlePos();
+            }
+        });
+
+        function triggerPopAtCursor() {
+            if (!canInteract || gameState !== 'playing') return;
+            canInteract = false;
+
+            reticle.classList.add('pinching');
+            setTimeout(() => {
+                reticle.classList.remove('pinching');
+                canInteract = true;
+            }, 250);
+
+            // Collision check with balloons
+            for (let i = 0; i < balloons.length; i++) {
+                const b = balloons[i];
+                const dist = Math.hypot(cursorX - b.x, cursorY - b.y);
+                if (dist <= b.radius) {
+                    popBalloon(b, i);
+                    break;
+                }
+            }
+        }
+
+        window.addEventListener('mousedown', () => { if (!cameraActive) triggerPopAtCursor(); });
+        window.addEventListener('touchstart', () => { if (!cameraActive) triggerPopAtCursor(); });
+
+        // --- MediaPipe Hands Camera Integration ---
+        let cameraActive = false;
+        const videoElement = document.getElementById('camera-feed');
+
+        function onHandResults(results) {
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0];
+                const indexTip = landmarks[8];
+                const thumbTip = landmarks[4];
+
+                // Mirrored coordinates
+                cursorX = (1 - indexTip.x) * width;
+                cursorY = indexTip.y * height;
+                updateReticlePos();
+
+                // Calculate pinch distance
+                const pinchDist = Math.hypot(indexTip.x - thumbTip.x, indexTip.y - thumbTip.y);
+
+                if (pinchDist < 0.055 && !isPinching) {
+                    isPinching = true;
+                    triggerPopAtCursor();
+                } else if (pinchDist > 0.08) {
+                    isPinching = false;
+                }
+            }
+        }
+
+        async function enableCamera() {
+            initAudio();
+            document.getElementById('camera-loading').classList.remove('hidden');
+            document.getElementById('btn-camera').disabled = true;
+
+            try {
+                const hands = new Hands({
+                    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+                });
+
+                hands.setOptions({
+                    maxNumHands: 1,
+                    modelComplexity: 1,
+                    minDetectionConfidence: 0.5,
+                    minTrackingConfidence: 0.5
+                });
+
+                hands.onResults(onHandResults);
+
+                const camera = new Camera(videoElement, {
+                    onFrame: async () => {
+                        await hands.send({ image: videoElement });
+                    },
+                    width: 320,
+                    height: 240
+                });
+
+                await camera.start();
+                cameraActive = true;
+                videoElement.style.display = 'block';
+                startLevel();
+            } catch (err) {
+                console.error("Camera Access Error:", err);
+                alert("Kamera tidak dapat digunakan. Anda dapat bermain menggunakan Mouse atau Layar Sentuh.");
+                startLevel();
+            }
+        }
+
+        function updateReticlePos() {
+            if (gameState === 'playing') {
+                reticle.style.display = 'block';
+                reticle.style.left = cursorX + 'px';
+                reticle.style.top = cursorY + 'px';
+            } else {
+                reticle.style.display = 'none';
+            }
+        }
+
+        // --- Screen & Flow Logic ---
+        function hideAllScreens() {
+            document.getElementById('screen-login').classList.add('hidden');
+            document.getElementById('screen-setup').classList.add('hidden');
+            document.getElementById('screen-feedback').classList.add('hidden');
+            document.getElementById('screen-level-end').classList.add('hidden');
+            document.getElementById('screen-game-complete').classList.add('hidden');
+            document.getElementById('question-box').classList.add('hidden');
+            document.getElementById('navbar').classList.add('hidden');
+        }
+
+        function startGame() {
+            initAudio();
+            const nameInput = document.getElementById('input-name').value;
+            playerName = nameInput.trim() !== "" ? nameInput : "Siswa Cerdas";
+
+            document.getElementById('nav-player-name').innerText = playerName;
+            document.getElementById('level-end-name').innerText = playerName;
+            document.getElementById('final-name').innerText = playerName;
+
+            currentLevel = 0;
+            currentQIndex = 0;
+            score = 0;
+            updateHUD();
+
+            hideAllScreens();
+            document.getElementById('screen-setup').classList.remove('hidden');
+        }
+
+        function startLevel() {
+            hideAllScreens();
+            document.getElementById('navbar').classList.remove('hidden');
+            document.getElementById('question-box').classList.remove('hidden');
+            
+            currentQIndex = 0;
+            loadQuestion();
+        }
+
+        function loadQuestion() {
+            gameState = 'playing';
+            const levelData = gameData[currentLevel];
+            const qData = levelData.questions[currentQIndex];
+
+            document.getElementById('nav-level').innerText = (currentLevel + 1);
+            document.getElementById('question-type').innerText = qData.type;
+            document.getElementById('question-count').innerText = `Soal ${currentQIndex + 1} dari 3`;
+            document.getElementById('question-text').innerText = qData.text;
+
+            // Update Level Progress Bar
+            const totalQuestionsSoFar = (currentLevel * 3) + currentQIndex;
+            const progressPercent = (totalQuestionsSoFar / 15) * 100;
+            document.getElementById('progress-bar').style.width = `${progressPercent}%`;
+
+            startTimer();
+            spawnBalloons(qData);
+        }
+
+        function startTimer() {
+            clearInterval(timerInterval);
+            timerSeconds = 30;
+            document.getElementById('nav-timer').innerText = `${timerSeconds}s`;
+
+            timerInterval = setInterval(() => {
+                if (gameState === 'playing') {
+                    timerSeconds--;
+                    document.getElementById('nav-timer').innerText = `${timerSeconds}s`;
+
+                    if (timerSeconds <= 0) {
+                        clearInterval(timerInterval);
+                        handleTimeOut();
+                    }
+                }
+            }, 1000);
+        }
+
+        function handleTimeOut() {
+            playSound('wrong');
+            showFeedback(false, "Waktu habis! Usahakan untuk menjawab lebih cepat ya.");
+        }
+
+        function spawnBalloons(qData) {
+            balloons = [];
+            const palette = ['#ef4444', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6'];
+            const options = qData.options;
+            const count = options.length;
+            const sectionWidth = width / count;
+
+            // Randomize order
+            let order = Array.from({length: count}, (_, i) => i);
+            order.sort(() => Math.random() - 0.5);
+
+            for (let i = 0; i < count; i++) {
+                const optIdx = order[i];
+                balloons.push({
+                    x: (sectionWidth * i) + (sectionWidth / 2) + (Math.random() * 20 - 10),
+                    y: height + 80 + (Math.random() * 60),
+                    radius: 65 + (width < 640 ? -15 : 0),
+                    speedY: -1.2 - (currentLevel * 0.15) - (Math.random() * 0.4),
+                    wobbleFreq: Math.random() * 0.05 + 0.02,
+                    wobbleAmp: Math.random() * 1.5 + 0.5,
+                    text: options[optIdx],
+                    isCorrect: (optIdx === qData.correct),
+                    color: palette[i % palette.length]
+                });
+            }
+        }
+
+        function popBalloon(balloon, index) {
+            clearInterval(timerInterval);
+            playSound('pop');
+            createExplosion(balloon.x, balloon.y, balloon.color);
+            balloons.splice(index, 1);
+
+            const qData = gameData[currentLevel].questions[currentQIndex];
+
+            if (balloon.isCorrect) {
+                playSound('correct');
+                score += 100 + (timerSeconds * 2); // Time bonus
+                updateHUD();
+                showFeedback(true, qData.explanation);
+            } else {
+                playSound('wrong');
+                showFeedback(false, qData.explanation);
+            }
+        }
+
+        function showFeedback(isCorrect, descText) {
+            gameState = 'feedback';
+            hideAllScreens();
+            document.getElementById('navbar').classList.remove('hidden');
+
+            const fbBox = document.getElementById('screen-feedback');
+            const fbTitle = document.getElementById('feedback-title');
+            const fbDesc = document.getElementById('feedback-desc');
+            const fbIcon = document.getElementById('feedback-icon');
+
+            if (isCorrect) {
+                fbIcon.innerText = "🎉";
+                fbTitle.innerText = "JAWABAN BENAR!";
+                fbTitle.className = "font-fredoka text-3xl mb-2 text-emerald-500";
+                fbBox.style.borderColor = "#34d399";
+            } else {
+                fbIcon.innerText = "💡";
+                fbTitle.innerText = "BELUM TEPAT!";
+                fbTitle.className = "font-fredoka text-3xl mb-2 text-rose-500";
+                fbBox.style.borderColor = "#f87171";
+            }
+
+            fbDesc.innerText = descText;
+            fbBox.classList.remove('hidden');
+        }
+
+        function nextQuestion() {
+            currentQIndex++;
+            if (currentQIndex < 3) {
+                hideAllScreens();
+                document.getElementById('navbar').classList.remove('hidden');
+                document.getElementById('question-box').classList.remove('hidden');
+                loadQuestion();
+            } else {
+                levelCompleted();
+            }
+        }
+
+        function levelCompleted() {
+            currentLevel++;
+            gameState = 'level_end';
+            hideAllScreens();
+
+            if (currentLevel < gameData.length) {
+                document.getElementById('navbar').classList.remove('hidden');
+                document.getElementById('screen-level-end').classList.remove('hidden');
+            } else {
+                gameCompletedAll();
+            }
+        }
+
+        function gameCompletedAll() {
+            gameState = 'game_complete';
+            hideAllScreens();
+            document.getElementById('progress-bar').style.width = `100%`;
+            document.getElementById('final-score').innerText = score;
+            document.getElementById('screen-game-complete').classList.remove('hidden');
+        }
+
+        function resetGame() {
+            gameState = 'login';
+            hideAllScreens();
+            document.getElementById('screen-login').classList.remove('hidden');
+        }
+
+        function updateHUD() {
+            document.getElementById('nav-score').innerText = score;
+        }
+
+        // --- Environment & Animation Rendering ---
+        // Clouds Setup
+        for (let i = 0; i < 5; i++) {
+            clouds.push({
+                x: Math.random() * width,
+                y: Math.random() * (height * 0.4),
+                radius: Math.random() * 30 + 30,
+                speed: Math.random() * 0.4 + 0.1
+            });
+        }
+
+        function createExplosion(x, y, color) {
+            for (let i = 0; i < 20; i++) {
+                particles.push({
+                    x: x, y: y,
+                    vx: (Math.random() - 0.5) * 12,
+                    vy: (Math.random() - 0.5) * 12,
+                    life: 1.0,
+                    color: color
+                });
+            }
+        }
+
+        function drawBackground() {
+            // Animated Clouds
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+            clouds.forEach(c => {
+                c.x += c.speed;
+                if (c.x - c.radius > width) c.x = -c.radius * 2;
+
+                ctx.beginPath();
+                ctx.arc(c.x, c.y, c.radius, 0, Math.PI * 2);
+                ctx.arc(c.x + c.radius * 0.6, c.y - c.radius * 0.3, c.radius * 0.8, 0, Math.PI * 2);
+                ctx.arc(c.x + c.radius * 1.2, c.y, c.radius * 0.7, 0, Math.PI * 2);
+                ctx.fill();
+            });
+        }
+
+        function drawBalloons(time) {
+            balloons.forEach((b) => {
+                if (gameState === 'playing') {
+                    b.y += b.speedY;
+                    b.x += Math.sin(time * b.wobbleFreq) * b.wobbleAmp;
+
+                    // Re-wrap balloon to bottom if floating off top
+                    if (b.y + b.radius < 0) {
+                        b.y = height + b.radius + 20;
+                    }
+                }
+
+                // Balloon String
+                ctx.beginPath();
+                ctx.moveTo(b.x, b.y + b.radius);
+                ctx.quadraticCurveTo(b.x + Math.sin(time * 0.05) * 8, b.y + b.radius + 25, b.x, b.y + b.radius + 45);
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 2.5;
+                ctx.stroke();
+
+                // 3D Metallic-like Shiny Balloon Body
+                const grad = ctx.createRadialGradient(
+                    b.x - b.radius * 0.3, b.y - b.radius * 0.3, b.radius * 0.1,
+                    b.x, b.y, b.radius
+                );
+                grad.addColorStop(0, '#ffffff');
+                grad.addColorStop(0.3, b.color);
+                grad.addColorStop(1, adjustColorBrightness(b.color, -30));
+
+                ctx.beginPath();
+                ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
+                ctx.fillStyle = grad;
+                ctx.shadowColor = 'rgba(0,0,0,0.15)';
+                ctx.shadowBlur = 10;
+                ctx.fill();
+
+                // Balloon Knot
+                ctx.beginPath();
+                ctx.moveTo(b.x - 6, b.y + b.radius - 2);
+                ctx.lineTo(b.x + 6, b.y + b.radius - 2);
+                ctx.lineTo(b.x, b.y + b.radius + 8);
+                ctx.fillStyle = b.color;
+                ctx.fill();
+
+                // Answer Text Label
+                ctx.fillStyle = '#ffffff';
+                ctx.font = `bold ${b.radius > 55 ? '15px' : '12px'} Nunito`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.shadowColor = 'rgba(0,0,0,0.5)';
+                ctx.shadowBlur = 4;
+
+                // Multiline text wrapping inside balloon
+                wrapText(ctx, b.text, b.x, b.y, b.radius * 1.5, 18);
+                ctx.shadowBlur = 0; // Reset
+            });
+        }
+
+        function drawParticles() {
+            for (let i = particles.length - 1; i >= 0; i--) {
+                let p = particles[i];
+                p.x += p.vx;
+                p.y += p.vy;
+                p.life -= 0.04;
+
+                if (p.life <= 0) {
+                    particles.splice(i, 1);
+                    continue;
+                }
+
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.life * 6, 0, Math.PI * 2);
+                ctx.fillStyle = p.color;
+                ctx.globalAlpha = p.life;
+                ctx.fill();
+                ctx.globalAlpha = 1.0;
+            }
+        }
+
+        function wrapText(context, text, x, y, maxWidth, lineHeight) {
+            const words = text.split(' ');
+            let line = '';
+            let lines = [];
+
+            for (let n = 0; n < words.length; n++) {
+                let testLine = line + words[n] + ' ';
+                if (context.measureText(testLine).width > maxWidth && n > 0) {
+                    lines.push(line);
+                    line = words[n] + ' ';
+                } else {
+                    line = testLine;
+                }
+            }
+            lines.push(line);
+
+            let startY = y - ((lines.length - 1) * lineHeight / 2);
+            lines.forEach((l, idx) => {
+                context.fillText(l.trim(), x, startY + (idx * lineHeight));
+            });
+        }
+
+        function adjustColorBrightness(col, amt) {
+            let num = parseInt(col.replace('#', ''), 16);
+            let r = (num >> 16) + amt;
+            let b = ((num >> 8) & 0x00FF) + amt;
+            let g = (num & 0x0000FF) + amt;
+            return '#' + (0x1000000 + (r < 255 ? (r < 0 ? 0 : r) : 255) * 0x10000 + (b < 255 ? (b < 0 ? 0 : b) : 255) * 0x100 + (g < 255 ? (g < 0 ? 0 : g) : 255)).toString(16).slice(1);
+        }
+
+        // Render Animation Loop
+        function gameLoop(time) {
+            ctx.clearRect(0, 0, width, height);
+
+            drawBackground();
+            drawBalloons(time);
+            drawParticles();
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Initiate Animation Loop
+        requestAnimationFrame(gameLoop);
+    </script>
+</body>
+</html>
